@@ -62,6 +62,18 @@ fn stop_all_sounds(state: State<'_, Arc<AppState>>) {
     state.audio.send(AudioCommand::StopAll);
 }
 
+/// Список имён доступных устройств вывода (для выбора устройства mic-микшера).
+#[tauri::command]
+fn list_output_devices() -> Vec<String> {
+    audio_engine::list_output_device_names()
+}
+
+/// Список имён доступных устройств ввода/микрофонов (для выбора реального микрофона).
+#[tauri::command]
+fn list_input_devices() -> Vec<String> {
+    audio_engine::list_input_device_names()
+}
+
 /// Показать главное окно настроек (из меню трея / по клику на иконку).
 #[tauri::command]
 fn show_settings(app: AppHandle) {
@@ -104,6 +116,11 @@ fn save_config(state: State<'_, Arc<AppState>>, config: AppConfig) -> Result<Vec
     }
 
     *state.config.lock().expect("config mutex poisoned") = config.clone();
+    // Mic-маршрут мог измениться — сообщаем аудио-движку (no-op, если имена те же).
+    state.audio.send(AudioCommand::SetMicRouting {
+        input_device: config.mic_input_device.clone(),
+        output_device: config.mic_output_device.clone(),
+    });
     let _ = state.engine_tx.send(EngineMessage::Reload {
         triggers: config.triggers.clone(),
         master_volume: config.master_volume,
@@ -175,6 +192,8 @@ fn spawn_engine_thread(
                                 sounds: trg.sounds.clone(),
                                 master_volume,
                                 allow_overlap,
+                                play_to_mic: trg.play_to_mic,
+                                play_for_self: trg.play_for_self,
                             });
                         }
                     }
@@ -241,6 +260,11 @@ pub fn run() {
     // ---------- Потоки: хук → движок → аудио (Phases 2-4) ----------
     let (engine_tx, engine_rx) = std_mpsc::channel::<EngineMessage>();
     let (audio, _audio_thread) = audio_engine::start_audio_engine();
+    // Начальная настройка mic-микшера из конфига (до переноса `audio` в AppState).
+    audio.send(AudioCommand::SetMicRouting {
+        input_device: cfg.mic_input_device.clone(),
+        output_device: cfg.mic_output_device.clone(),
+    });
     let paused = Arc::new(AtomicBool::new(false));
     let _engine_thread = spawn_engine_thread(engine_rx, audio.clone(), cfg.clone());
     let _hook_thread = keyboard_hook::start_keyboard_hook(engine_tx.clone(), Arc::clone(&paused));
@@ -390,6 +414,8 @@ pub fn run() {
             test_sound,
             toggle_pause,
             stop_all_sounds,
+            list_output_devices,
+            list_input_devices,
             show_settings,
             hide_main_window,
             hide_tray_menu,

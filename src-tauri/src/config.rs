@@ -24,6 +24,18 @@ pub struct AppConfig {
     pub allow_overlap: bool,
     /// Автозагрузка вместе с Windows.
     pub auto_start: bool,
+    /// Имя устройства ВЫВОДА для mic-микшера (Soundpad-режим): обычно
+    /// «CABLE Input» виртуального кабеля VB-Audio — сюда рендерится
+    /// смешанный поток «микрофон + звуки триггеров». Пользователь выбирает
+    /// парное «CABLE Output» как микрофон в Discord/игре.
+    /// `None` — функция выключена.
+    #[serde(default)]
+    pub mic_output_device: Option<String>,
+    /// Имя устройства ВВОДА (реального физического микрофона), который
+    /// непрерывно захватывается и микшируется в mic-поток.
+    /// `None` — passthrough голоса выключен (только звуки триггеров).
+    #[serde(default)]
+    pub mic_input_device: Option<String>,
     #[serde(default)]
     pub triggers: Vec<TriggerRule>,
 }
@@ -36,6 +48,18 @@ pub struct TriggerRule {
     pub words: Vec<String>,
     #[serde(default)]
     pub sounds: Vec<SoundOption>,
+    /// Дополнительно микшировать звук в живой mic-поток (слышат люди в звонке).
+    #[serde(default)]
+    pub play_to_mic: bool,
+    /// Проигрывать звук локально (слышит сам пользователь). По умолчанию
+    /// включено; выключив — звук уходит только в mic-поток (play_to_mic),
+    /// то есть собеседники слышат, а сам пользователь — нет.
+    #[serde(default = "default_true")]
+    pub play_for_self: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -53,6 +77,8 @@ impl Default for AppConfig {
             master_volume: 0.8,
             allow_overlap: true,
             auto_start: false,
+            mic_output_device: None,
+            mic_input_device: None,
             triggers: Vec::new(),
         }
     }
@@ -217,6 +243,8 @@ mod tests {
             master_volume: 0.7,
             allow_overlap: false,
             auto_start: true,
+            mic_output_device: None,
+            mic_input_device: None,
             triggers: vec![TriggerRule {
                 id: "t1".into(),
                 name: "Банан".into(),
@@ -226,6 +254,8 @@ mod tests {
                     volume: 0.9,
                     weight: 60,
                 }],
+                play_to_mic: false,
+                play_for_self: true,
             }],
         }
     }
