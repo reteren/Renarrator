@@ -53,12 +53,10 @@ pub enum AudioCommand {
     },
     /// Остановить всё воспроизведение.
     StopAll,
-    /// (Пере)настроить mic-микшер: реальный микрофон для захвата и устройство
-    /// вывода (виртуальный кабель), куда рендерится смешанный поток.
-    SetMicRouting {
-        input_device: Option<String>,
-        output_device: Option<String>,
-    },
+    /// (Пере)настроить mic-микшер: устройство вывода (виртуальный кабель),
+    /// куда рендерится смешанный поток. Микрофон для захвата не выбирается —
+    /// всегда берётся текущий системный микрофон по умолчанию.
+    SetMicRouting { output_device: Option<String> },
 }
 
 /// Публичная ручка движка: клонируемый Sender + поток.
@@ -110,21 +108,6 @@ pub fn list_output_device_names() -> Vec<String> {
             .collect(),
         Err(e) => {
             eprintln!("[audio] cannot enumerate output devices: {e}");
-            Vec::new()
-        }
-    }
-}
-
-/// Список имён доступных устройств ввода (микрофонов) — для UI (Tauri command `list_input_devices`).
-pub fn list_input_device_names() -> Vec<String> {
-    let host = cpal::default_host();
-    match host.input_devices() {
-        Ok(devices) => devices
-            .filter_map(|d| d.description().ok())
-            .map(|desc| device_display_name(&desc))
-            .collect(),
-        Err(e) => {
-            eprintln!("[audio] cannot enumerate input devices: {e}");
             Vec::new()
         }
     }
@@ -198,30 +181,29 @@ impl Source for MicPassthroughSource {
     }
 }
 
-/// Открыть поток захвата реального микрофона по точному имени и запустить его.
+/// Открыть поток захвата ТЕКУЩЕГО системного микрофона по умолчанию и
+/// запустить его. Никакого выбора устройства пользователем — всегда берём
+/// то, что Windows в данный момент считает микрофоном по умолчанию, чтобы
+/// не хранить имя, которое может «протухнуть» при смене оборудования.
 /// Колбэк пишет сэмплы в `buffer`. Отказоустойчиво: при любой ошибке — лог
-/// и `None` (микрофон мог быть отключён; приложение продолжает работать).
+/// и `None` (микрофона может не быть; приложение продолжает работать).
 ///
 /// ВАЖНО: `cpal::Stream` должен жить только на потоке движка — возвращаем его
 /// вызывающему коду в `engine_loop`, не передавая между потоками.
-fn open_mic_capture(
-    name: &str,
-    buffer: Arc<MicRingBuffer>,
-) -> Option<(cpal::Stream, ChannelCount, SampleRate)> {
+fn open_default_mic_capture(buffer: Arc<MicRingBuffer>) -> Option<(cpal::Stream, ChannelCount, SampleRate)> {
     let host = cpal::default_host();
-    let devices = match host.input_devices() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("[audio] cannot enumerate input devices: {e}");
+    let device = match host.default_input_device() {
+        Some(d) => d,
+        None => {
+            eprintln!("[audio] no default microphone found");
             return None;
         }
     };
-    let device = devices.into_iter().find(|d| {
-        d.description()
-            .map(|desc| device_display_name(&desc) == name)
-            .unwrap_or(false)
-    });
-    let device = device?;
+    let name = device
+        .description()
+        .ok()
+        .map(|desc| device_display_name(&desc))
+        .unwrap_or_else(|| "<unknown>".to_string());
     let config = match device.default_input_config() {
         Ok(c) => c,
         Err(e) => {
@@ -348,7 +330,6 @@ fn engine_loop(rx: Receiver<AudioCommand>) {
     let mut mic_sink: Option<MixerDeviceSink> = None;
     let mut mic_output_device_name: Option<String> = None;
     let mut mic_input_stream: Option<cpal::Stream> = None;
-    let mut mic_input_device_name: Option<String> = None;
     let mut mic_passthrough_player: Option<Player> = None;
     let mut rng = rand::rng();
 
@@ -406,11 +387,8 @@ fn engine_loop(rx: Receiver<AudioCommand>) {
                 stop_all(&mut active);
                 stop_all(&mut mic_active);
             }
-            AudioCommand::SetMicRouting {
-                input_device,
-                output_device,
-            } => {
-                if input_device != mic_input_device_name || output_device != mic_output_device_name {
+            AudioCommand::SetMicRouting { output_device } => {
+                if output_device != mic_output_device_name {
                     // Разбираем в порядке зависимостей: passthrough зависит от mic_sink,
                     // поток захвата независим. Drop старого sink останавливает его вывод.
                     drop(mic_passthrough_player.take());
@@ -419,27 +397,24 @@ fn engine_loop(rx: Receiver<AudioCommand>) {
                     mic_sink = output_device.as_deref().and_then(open_named_output_device);
 
                     if let Some(sink) = &mic_sink {
-                        if let Some(in_name) = input_device.as_deref() {
-                            let ring = MicRingBuffer::new();
-                            if let Some((stream, channels, sample_rate)) =
-                                open_mic_capture(in_name, Arc::clone(&ring))
-                            {
-                                let source = MicPassthroughSource {
-                                    buffer: ring,
-                                    channels,
-                                    sample_rate,
-                                };
-                                let player = Player::connect_new(sink.mixer());
-                                player.append(source);
-                                mic_passthrough_player = Some(player);
-                                mic_input_stream = Some(stream);
-                            }
-                            // иначе open_mic_capture уже залогировала причину;
-                            // passthrough выключен, но mic_sink пригоден для
-                            // маршрутизации одних только звуков триггеров.
+                        let ring = MicRingBuffer::new();
+                        if let Some((stream, channels, sample_rate)) =
+                            open_default_mic_capture(Arc::clone(&ring))
+                        {
+                            let source = MicPassthroughSource {
+                                buffer: ring,
+                                channels,
+                                sample_rate,
+                            };
+                            let player = Player::connect_new(sink.mixer());
+                            player.append(source);
+                            mic_passthrough_player = Some(player);
+                            mic_input_stream = Some(stream);
                         }
+                        // иначе open_default_mic_capture уже залогировала причину;
+                        // passthrough выключен, но mic_sink пригоден для
+                        // маршрутизации одних только звуков триггеров.
                     }
-                    mic_input_device_name = input_device;
                     mic_output_device_name = output_device;
                 }
             }

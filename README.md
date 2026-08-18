@@ -33,6 +33,7 @@ Type `banana` in a chat, a game, or a text editor - get a sound. The keyboard la
 - **Drag & Drop** - Drag audio files directly onto the sound line in settings.
 - **Windows Startup** - Optional autorun via `HKCU\...\Run`.
 - **Glass UI** - Acrylic blur and rounded corners via DWM, featuring a custom title bar.
+- **Soundpad-Style Mic Mixing** - Continuously captures your default microphone and mixes trigger sounds into it in real time, rendering the mix to a virtual audio cable so voice chat apps (Discord, TeamSpeak, in-game voice) hear the sounds as if they came from your mic. Per-trigger toggles: "Play into microphone" (others hear it) and "Play for myself" (you hear it too, on by default). Zero manual device setup: the first time you enable "Play into microphone" on any trigger, Renarrator detects or silently installs a virtual audio cable for you (one Windows admin prompt, see Privacy below) - you only need to pick that cable as your microphone once in Discord/your game's own settings, same as you would for the original Soundpad.
 
 ## Installation (User Guide)
 
@@ -49,7 +50,7 @@ Type `banana` in a chat, a game, or a text editor - get a sound. The keyboard la
 
 ### Privacy
 
-The keystroke buffer exists **solely in RAM**, resets after each word, and is never transmitted anywhere. The application makes no network requests whatsoever.
+The keystroke buffer exists **solely in RAM**, resets after each word, and is never transmitted anywhere. The one network request the app can make: the first time you check **"Play into microphone"** on a trigger, if no virtual audio cable is already installed, Renarrator downloads the official VB-CABLE installer from `vb-audio.com` and runs it - Windows will show the same administrator/UAC prompt you'd see installing it by hand. This never happens unless you enable that checkbox.
 
 ## Building from Source
 
@@ -91,9 +92,10 @@ GitHub Actions (`.github/workflows/release.yml`) will build the NSIS installer a
 │  │  ├─ keyboard_hook.rs   # Global low-level hook (rdev)
 │  │  ├─ layout_map.rs      # Physical keys → characters (RU/EN)
 │  │  ├─ buffer_manager.rs  # Input buffer, timeouts, word matching
-│  │  ├─ audio_engine.rs    # rodio: polyphony, weights, volume
+│  │  ├─ audio_engine.rs    # rodio/cpal: polyphony, weights, volume, mic capture + mixing
 │  │  ├─ config.rs          # %APPDATA%\KeySoundTrigger\config.json
 │  │  ├─ autostart.rs       # Startup via Windows registry
+│  │  ├─ virtual_mic_setup.rs # Downloads/installs VB-CABLE on demand (UAC-elevated)
 │  │  └─ win_glass.rs       # DWM acrylic + rounded regions
 │  └─ tauri.conf.json
 └─ .github/workflows/       # Release CI

@@ -29,13 +29,31 @@ thiserror = "2"
 # Автозагрузка через HKCU\...\Run
 winreg = "0.56"
 # DWM blur-behind по скруглённому HRGN (честные закруглённые углы окна)
+# + ShellExecuteExW (UAC-повышение) для установки виртуального аудио-кабеля
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# Скачивание официального инсталлятора VB-CABLE по клику пользователя
+# (единственное место в приложении, где выполняется сетевой запрос)
+ureq = { version = "3", features = ["rustls"] }
+# Распаковка driver-пака VB-CABLE (.zip с setup.exe + .inf/.cat/.sys)
+zip = { version = "8", default-features = false, features = ["deflate"] }
+# Восстановление устройства вывода по умолчанию после установки VB-CABLE:
+# Windows иногда сама переключает дефолтное устройство на новый аудио-эндпоинт
+# при установке драйвера (не баг VB-CABLE — так делает ОС). IPolicyConfig —
+# недокументированный, но общеизвестный COM-интерфейс для этого; используем
+# готовый проверенный крейт вместо самодельного vtable.
+windows = { version = "0.61", default-features = false, features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+] }
+com-policy-config = "0.6"
 
 [profile.dev]
 incremental = true

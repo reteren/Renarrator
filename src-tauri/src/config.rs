@@ -28,14 +28,12 @@ pub struct AppConfig {
     /// «CABLE Input» виртуального кабеля VB-Audio — сюда рендерится
     /// смешанный поток «микрофон + звуки триггеров». Пользователь выбирает
     /// парное «CABLE Output» как микрофон в Discord/игре.
-    /// `None` — функция выключена.
+    /// Настраивается автоматически (см. main.js `ensureMicRoutingReady`) —
+    /// в UI нет ручного выбора устройства. `None` — функция выключена.
+    /// Микрофон для захвата не хранится: всегда берётся текущий системный
+    /// микрофон по умолчанию (см. `audio_engine::open_default_mic_capture`).
     #[serde(default)]
     pub mic_output_device: Option<String>,
-    /// Имя устройства ВВОДА (реального физического микрофона), который
-    /// непрерывно захватывается и микшируется в mic-поток.
-    /// `None` — passthrough голоса выключен (только звуки триггеров).
-    #[serde(default)]
-    pub mic_input_device: Option<String>,
     #[serde(default)]
     pub triggers: Vec<TriggerRule>,
 }
@@ -78,7 +76,6 @@ impl Default for AppConfig {
             allow_overlap: true,
             auto_start: false,
             mic_output_device: None,
-            mic_input_device: None,
             triggers: Vec::new(),
         }
     }
@@ -244,7 +241,6 @@ mod tests {
             allow_overlap: false,
             auto_start: true,
             mic_output_device: None,
-            mic_input_device: None,
             triggers: vec![TriggerRule {
                 id: "t1".into(),
                 name: "Банан".into(),

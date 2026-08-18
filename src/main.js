@@ -23,7 +23,7 @@ async function invokeRetry(cmd, args, attempts = 8, delayMs = 250) {
   throw lastErr;
 }
 
-let config = { master_volume: 0.8, allow_overlap: true, auto_start: false, mic_output_device: null, mic_input_device: null, triggers: [] };
+let config = { master_volume: 0.8, allow_overlap: true, auto_start: false, mic_output_device: null, triggers: [] };
 let paused = false;
 
 function uid() {
@@ -51,70 +51,78 @@ function renderGlobal() {
   $("#auto-start").checked = config.auto_start;
 }
 
-// ---------- Микрофон-микширование (Soundpad-style) ----------
+// ---------- Микрофон-микширование (Soundpad-style, полностью автоматически) ----------
+//
+// Никакого ручного выбора устройств в UI: микрофон всегда системный по
+// умолчанию (решает бэкенд), а виртуальный кабель для вывода либо находится
+// среди уже установленных устройств, либо ставится сам по требованию — в тот
+// момент, когда пользователь впервые включает "Play into microphone" на
+// каком-то триггере (см. wiring в buildTriggerCard ниже).
 
-async function loadMicInputDevices() {
-  const sel = $("#mic-input-device");
-  const current = config.mic_input_device || "";
-  let names = [];
-  try {
-    names = await invoke("list_input_devices");
-  } catch (e) {
-    setStatus("Could not list microphone devices: " + e, "err");
-  }
-  sel.innerHTML = "";
-  const noneOpt = document.createElement("option");
-  noneOpt.value = "";
-  noneOpt.textContent = "— Disabled —";
-  sel.appendChild(noneOpt);
-  for (const name of names) {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    sel.appendChild(opt);
-  }
-  sel.value = current;
-}
-
-// Общеизвестные имена виртуальных аудио-кабелей (VB-Audio, VoiceMeeter, ...).
-// Если ничего не выбрано вручную — подставляем первое совпадение сами,
-// чтобы пользователю не пришлось разбираться, какое из устройств виртуальное.
+// Общеизвестные имена виртуальных аудио-кабелей (VB-Audio, VoiceMeeter, ...),
+// в порядке ОТ САМОГО ТОЧНОГО к самому общему. Важно проверять паттерны по
+// очереди ПО ВСЕМ устройствам, а не устройство за устройством: у некоторых
+// пользователей VB-CABLE ставит сразу два варианта кабеля — классическую
+// пару "CABLE Input"/"CABLE Output" (у которой обязательно есть парная сторона
+// для записи) и дополнительный "CABLE In 16ch" (который в некоторых сборках
+// драйвера НЕ имеет парного устройства записи — Discord никогда не увидит его
+// как микрофон). Общий паттерн "vb-audio" совпадает с обоими, поэтому если
+// проверять устройство за устройством, можно случайно выбрать нерабочий
+// вариант просто из-за порядка перечисления. Проверка паттерн-за-паттерном
+// гарантирует, что точный "cable input" выигрывает у общего "vb-audio".
 const VIRTUAL_CABLE_PATTERNS = ["cable input", "voicemeeter", "virtual audio cable", "vb-audio"];
 
 function findVirtualCableName(names) {
-  return names.find((n) => {
-    const lower = n.toLowerCase();
-    return VIRTUAL_CABLE_PATTERNS.some((p) => lower.includes(p));
-  });
+  for (const pattern of VIRTUAL_CABLE_PATTERNS) {
+    const match = names.find((n) => n.toLowerCase().includes(pattern));
+    if (match) return match;
+  }
+  return undefined;
 }
 
-async function loadMicOutputDevices() {
-  const sel = $("#mic-output-device");
-  let names = [];
+let micSetupInProgress = false;
+
+// Гарантирует, что config.mic_output_device указывает на реальный
+// установленный виртуальный кабель — при необходимости ставит его сам
+// (сетевой запрос + UAC-повышение, см. src-tauri/src/virtual_mic_setup.rs).
+// Ничего не делает, если уже настроено — безопасно звать многократно.
+async function ensureMicRoutingReady() {
+  if (config.mic_output_device || micSetupInProgress) return;
+  micSetupInProgress = true;
   try {
-    names = await invoke("list_output_devices");
-  } catch (e) {
-    setStatus("Could not list output devices: " + e, "err");
+    let names = [];
+    try {
+      names = await invoke("list_output_devices");
+    } catch (e) {
+      setStatus("Could not check for a virtual microphone: " + e, "err");
+      return;
+    }
+    const existing = findVirtualCableName(names);
+    if (existing) {
+      config.mic_output_device = existing;
+      return;
+    }
+    setStatus("Setting up virtual microphone — approve the Windows permission prompt…", "");
+    try {
+      await invoke("setup_virtual_mic");
+    } catch (e) {
+      setStatus("Virtual microphone setup failed: " + e, "err");
+      return;
+    }
+    const namesAfter = await invoke("list_output_devices").catch(() => []);
+    const installed = findVirtualCableName(namesAfter);
+    if (installed) {
+      config.mic_output_device = installed;
+      setStatus("Virtual microphone ready — pick it as your mic in Discord/your game", "ok");
+    } else {
+      setStatus(
+        "Installed, but couldn't detect the new device yet — try the checkbox again",
+        "err"
+      );
+    }
+  } finally {
+    micSetupInProgress = false;
   }
-  // Автоопределение виртуального кабеля, только если пользователь ещё
-  // ничего не выбрал сам — ручной выбор никогда не перезаписываем.
-  if (!config.mic_output_device) {
-    const detected = findVirtualCableName(names);
-    if (detected) config.mic_output_device = detected;
-  }
-  const current = config.mic_output_device || "";
-  sel.innerHTML = "";
-  const noneOpt = document.createElement("option");
-  noneOpt.value = "";
-  noneOpt.textContent = "— Disabled —";
-  sel.appendChild(noneOpt);
-  for (const name of names) {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    sel.appendChild(opt);
-  }
-  sel.value = current;
 }
 
 // ---------- Рендер триггеров ----------
@@ -145,7 +153,11 @@ function buildTriggerCard(trg) {
 
   const micInput = node.querySelector(".t-mic");
   micInput.checked = Boolean(trg.play_to_mic);
-  micInput.addEventListener("change", () => (trg.play_to_mic = micInput.checked));
+  micInput.addEventListener("change", () => {
+    trg.play_to_mic = micInput.checked;
+    // Включили впервые — сам ставит/находит виртуальный кабель, без выбора вручную.
+    if (micInput.checked) ensureMicRoutingReady();
+  });
 
   // По умолчанию включено (undefined/отсутствует в старом конфиге тоже считается "включено").
   const playForSelfInput = node.querySelector(".t-play-for-self");
@@ -276,7 +288,19 @@ async function init() {
   renderGlobal();
   renderTriggers();
   renderPause();
-  await Promise.all([loadMicInputDevices(), loadMicOutputDevices()]);
+
+  // Самовосстановление: если какой-то триггер уже хочет play_to_mic (например,
+  // из старого конфига), но маршрут не настроен (mic_output_device пуст) —
+  // не ждём, пока пользователь заново дёрнет чекбокс, чиним сразу при открытии.
+  // И сразу сохраняем — это фоновый self-heal, а не ручное действие
+  // пользователя, ждать отдельного клика по Save тут не нужно.
+  if (!config.mic_output_device && config.triggers.some((t) => t.play_to_mic)) {
+    ensureMicRoutingReady().then(() => {
+      if (config.mic_output_device) {
+        invoke("save_config", { config }).catch(() => {});
+      }
+    });
+  }
 
   $("#master-volume").addEventListener("input", (e) => {
     config.master_volume = clamp(Number(e.target.value) / 100, 0, 1);
@@ -290,17 +314,6 @@ async function init() {
     "change",
     (e) => (config.auto_start = e.target.checked)
   );
-
-  $("#mic-output-device").addEventListener("change", (e) => {
-    config.mic_output_device = e.target.value || null;
-  });
-  $("#mic-input-device").addEventListener("change", (e) => {
-    config.mic_input_device = e.target.value || null;
-  });
-  $("#mic-device-refresh").addEventListener("click", () => {
-    loadMicInputDevices();
-    loadMicOutputDevices();
-  });
 
   $("#add-trigger").addEventListener("click", () => {
     config.triggers.push({ id: uid(), name: "New Trigger", words: [], sounds: [], play_to_mic: false, play_for_self: true });
