@@ -156,15 +156,7 @@ function buildTriggerCard(trg) {
   micInput.addEventListener("change", () => {
     trg.play_to_mic = micInput.checked;
     // Включили впервые — сам ставит/находит виртуальный кабель, без выбора вручную.
-    // Сохраняем сразу: без явного клика по Save найденное устройство осталось бы
-    // только в памяти вкладки и движок ничего не узнал бы про него.
-    if (micInput.checked) {
-      ensureMicRoutingReady().then(() => {
-        if (config.mic_output_device) {
-          invoke("save_config", { config }).catch(() => {});
-        }
-      });
-    }
+    if (micInput.checked) ensureMicRoutingReady();
   });
 
   // По умолчанию включено (undefined/отсутствует в старом конфиге тоже считается "включено").

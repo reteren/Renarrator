@@ -388,14 +388,7 @@ fn engine_loop(rx: Receiver<AudioCommand>) {
                 stop_all(&mut mic_active);
             }
             AudioCommand::SetMicRouting { output_device } => {
-                // Повторяем попытку открыть устройство не только при смене имени,
-                // но и если имя то же самое, а sink так и не открылся в прошлый раз
-                // (например, виртуальный кабель ещё не успел зарегистрироваться в
-                // системе сразу после установки) — иначе один неудачный запуск
-                // навсегда «замораживал» mic-маршрут до перезапуска приложения.
-                let device_changed = output_device != mic_output_device_name;
-                let needs_retry = output_device.is_some() && mic_sink.is_none();
-                if device_changed || needs_retry {
+                if output_device != mic_output_device_name {
                     // Разбираем в порядке зависимостей: passthrough зависит от mic_sink,
                     // поток захвата независим. Drop старого sink останавливает его вывод.
                     drop(mic_passthrough_player.take());
